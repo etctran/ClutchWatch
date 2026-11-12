@@ -7,4 +7,13 @@
 - Smoke service (`smoke/`, Python 3.12 Dockerfile) deployed to Cloud Run, then deleted.
 - **Result:** plain fetch of `cdn.nba.com/.../todaysScoreboard_00.json` returns **HTTP 403** from Cloud Run, and also 403 from a residential laptop with curl.
   The block is on request headers (non-browser client), not on cloud IPs, so the spec's "run the poller locally" fallback does not help.
-- Live-mode data access: **open decision** (see DECISIONS.md). Replay mode (historical data) is unaffected.
+- Live-mode data access: re-tested with `nba_api.live` from Cloud Run: **succeeds** (`{"ok": true, "gameDate": "2026-11-12", "games": 4}`). Smoke service deleted.
+- **Exit met.**
+
+## M1: Event model and ingestion (2026-11-12)
+- `ingest/normalize.py`: `GameEvent` (+ `order_number`, see DECISIONS) and one normalizer for live JSON and historical CSV (same CDN schema).
+- `ingest/replayer.py` (`--speedup` / `--target-rate`, games heap-merged by `timeActual`, per-game `orderNumber` order), `ingest/live_poller.py` (`actionNumber` cursor per game, 5 s poll), `ingest/publisher.py` (ordering key = game_id).
+- Tests: 8 pass (`uv run pytest`). Fixtures are real: 2024-25 ATL@BOS (`22400001`, historical CSV) and 2026-11-11 OKC@POR (`0022600226`, live CDN JSON via nba_api).
+- Exit check: replayed `0022400001` to `game-events` (`--target-rate 200`): published=538 failed=0; pulled back from an ordered subscription: 538 unique, first deliveries in order, final ATL 117 @ BOS 116. One earlier pull run saw 50 redeliveries (588 received).
+- Temp topic/subscription deleted; Terraform owns them from M2.
+- **Exit met.**
