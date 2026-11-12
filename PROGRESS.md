@@ -17,3 +17,9 @@
 - Exit check: replayed `0022400001` to `game-events` (`--target-rate 200`): published=538 failed=0; pulled back from an ordered subscription: 538 unique, first deliveries in order, final ATL 117 @ BOS 116. One earlier pull run saw 50 redeliveries (588 received).
 - Temp topic/subscription deleted; Terraform owns them from M2.
 - **Exit met.**
+
+## M3: Win-probability model (2026-11-12)
+- `model/train.py` (one row per scoring event, train 2020-21..2022-23), `model/evaluate.py`, exported `processor/wp_model.json`; runtime `processor/winprob.py` (no ML deps), shared `features()`.
+- T7 on test 2024-25: Brier 0.1641 vs 0.2500 (const) / 0.2497 (leader wins); max decile calibration error 0.0310. See RESULTS.md.
+- Wired into processor: every `state-updates` row carries `home_wp`.
+- **Exit met.**

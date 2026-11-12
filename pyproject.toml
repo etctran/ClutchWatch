@@ -3,14 +3,25 @@ name = "clutchwatch"
 version = "0.1.0"
 requires-python = "==3.12.*"
 dependencies = [
+    "fastapi>=0.162.5",
     "google-cloud-pubsub>=2.44.0",
     "nba-api>=1.12.0",
     "pandas>=3.1.1",
     "pyarrow>=26.0.1",
+    "redis>=8.1.0",
+    "uvicorn>=0.54.0",
 ]
 
 [dependency-groups]
-dev = ["pytest"]
+dev = [
+    "fakeredis[lua]>=2.40.0",
+    "httpx>=0.28.1",
+    "pytest",
+]
+model = [
+    "matplotlib>=3.11.2",
+    "scikit-learn>=1.9.1",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
