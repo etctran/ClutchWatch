@@ -23,3 +23,10 @@
 - T7 on test 2024-25: Brier 0.1641 vs 0.2500 (const) / 0.2497 (leader wins); max decile calibration error 0.0310. See RESULTS.md.
 - Wired into processor: every `state-updates` row carries `home_wp`.
 - **Exit met.**
+
+## M2: Core pipeline on GCP (2026-11-12)
+- `infra/*.tf` (21 resources): topics game-events / state-updates / game-events-dlq; ordered push subscription to the processor (OIDC, DLQ after 5 attempts); BigQuery dataset + `raw_events` / `wp_timeline` via BigQuery subscriptions; Memorystore Redis 7.2 basic 1 GB; Cloud Run `processor` with Direct VPC egress; least-privilege service accounts. `scripts/deploy.sh` builds the image (Cloud Build) and applies; first apply 6m27s (Redis 4m27s).
+- Processor: idempotent Lua apply, `home_wp`, `GET /games/{id}` for verification.
+- Exit check: replayed `0022400001` (`--target-rate 50`, published from laptop). Redis via `GET /games/0022400001`: applied=538, BOS 116 / ATL 117. `bench/queries/counts_by_game.sql`: raw_events 538 = processed 538, redeliveries 0, final BOS 116 / ATL 117. DLQ pull: empty.
+- **Exit met.**
+- Finding for M5: one game drained at only ~20 events/s (applied 52 -> 233 -> 445 -> 538 at ~10 s intervals), so publish->processed latency on this run was p50 18.0 s / p99 25.8 s: pure queueing behind the per-key limit (ordered push = one message in flight per game). Not a T2 measurement (published from a laptop, single game, over-driven); see DECISIONS.

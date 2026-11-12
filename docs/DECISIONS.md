@@ -17,3 +17,24 @@ M1 verification on one 538-event game: one pull run received 588 messages (50 re
 
 ## Home/away inferred for historical games
 The archive has no home/away column. The team whose basket increases `scoreHome` is home (`infer_home_away`). Live mode takes home/away from the scoreboard instead.
+
+## Idempotent apply = one Lua script (SET NX + state update)
+Pub/Sub push is at-least-once. The processor runs one Lua script per event: `SET seen:<event_id> NX EX 7d`; if that succeeds, bump `applied` and update the game hash, but only if `order_number` is newer than the stored one. Atomic in Redis, so a crash can't leave "marked seen but state not updated". Alternative: `MULTI` with a `WATCH`, which needs a client-side retry loop for the same guarantee.
+
+## The processor publishes a state row even for duplicates
+If the processor crashes after the Redis apply but before publishing to `state-updates`, the redelivery would be its only chance to emit that row. So every delivery publishes a row built from the event itself (scores are absolute, so a duplicate row is identical apart from `processed_at`/`duplicate`). `wp_timeline` is read with `COUNT(DISTINCT event_id)` / `MIN(processed_at)`, and `duplicate=true` rows directly count redeliveries for T5.
+
+## Win-prob features shared by training and serving
+`processor/winprob.py` owns `features()`; `model/train.py` imports it, and `wp_model.json` records the feature names, which `WinProb` asserts on load. That rules out train/serve skew in feature code. The model file lives in `processor/` (spec said `model/`) so the processor image only needs that one directory.
+
+## One container image for all components
+The processor, replayer and live poller share code (`ingest/normalize.py`, `processor/winprob.py`), so one image with a per-service command means one build and no version skew between publisher and consumer.
+
+## Direct VPC egress to Memorystore (no Serverless VPC Access connector)
+Cloud Run reaches Redis's private IP through Direct VPC egress on the default subnet, `PRIVATE_RANGES_ONLY`. A connector is a separate always-on resource (min 2 e2-micro instances) that would bill while idle, which works against the idle ≈ $0 goal (T10).
+
+## Processor handler is sync `def`, not `async def`
+Redis and the Pub/Sub publish `.result()` are blocking calls. Inside `async def` they would stall the event loop and serialize every request on an instance. As a plain `def`, FastAPI runs them in its threadpool, so one instance serves many games' in-flight pushes concurrently.
+
+## Ordered push caps per-game throughput (measured, open)
+With ordering keys, Pub/Sub push keeps one message outstanding per key. M2's one-game replay drained at ~20 events/s (~50 ms per push round trip incl. Redis + state publish). Throughput is therefore ~20 ev/s x concurrently-active games: 1,000 ev/s needs ~50 games in flight. A real NBA night has <= 15 games and a live game produces < 1 ev/s, so live mode has ~100x headroom; the 1,000 ev/s load test (T1) is the stress case. Options for M5, to decide on measurement: replay many games concurrently (honest: models many simultaneous games), shave the per-message round trip, or switch the processor to a pull subscriber that can pipeline per key (bigger change).
