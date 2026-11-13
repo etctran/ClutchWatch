@@ -140,6 +140,7 @@ dependencies = [
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "redis" },
+    { name = "requests" },
     { name = "uvicorn" },
 ]
 
@@ -162,6 +163,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=3.1.1" },
     { name = "pyarrow", specifier = ">=26.0.1" },
     { name = "redis", specifier = ">=8.1.0" },
+    { name = "requests", specifier = ">=2.34.2" },
     { name = "uvicorn", specifier = ">=0.54.0" },
 ]
 

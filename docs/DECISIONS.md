@@ -38,3 +38,18 @@ Redis and the Pub/Sub publish `.result()` are blocking calls. Inside `async def`
 
 ## Ordered push caps per-game throughput (measured, open)
 With ordering keys, Pub/Sub push keeps one message outstanding per key. M2's one-game replay drained at ~20 events/s (~50 ms per push round trip incl. Redis + state publish). Throughput is therefore ~20 ev/s x concurrently-active games: 1,000 ev/s needs ~50 games in flight. A real NBA night has <= 15 games and a live game produces < 1 ev/s, so live mode has ~100x headroom; the 1,000 ev/s load test (T1) is the stress case. Options for M5, to decide on measurement: replay many games concurrently (honest: models many simultaneous games), shave the per-message round trip, or switch the processor to a pull subscriber that can pipeline per key (bigger change).
+
+## Alert state is a JSON blob per game, evaluated by a pure function
+`evaluate(state, event, wp) -> (alerts, state)` has no I/O, so every rule (window, cooldown, cap, once-per-period) is unit-tested without Redis, and the M4 exit's "expected alerts" were computed by running the same function offline. The state lives in Redis (`alerts:<game_id>`), so dedup survives restarts. No lock is needed because ordered push keeps one message in flight per game.
+
+## Alerts: publish first, then save state; deterministic `alert_id`
+If the processor crashes after publishing alerts but before saving alert state, the next event re-fires the same alert with the same `alert_id` (`<game>:CLOSE_LATE:<period>`, `<game>:COMEBACK:<side>`) and the notifier drops it. Saving first would lose the alert instead. That is at-least-once plus dedup, rather than at-most-once. Known gap: a WP_SWING id includes the game second, so a crash in that window could produce a second, differently-timed swing alert.
+
+## Notifier dedup: claim, send, mark
+`SET sent:<alert_id> sending NX EX 60` -> POST to Discord -> `SET sent:<alert_id> sent`. Redelivered pushes find `sent` and ack; concurrent ones see `sending` and get a 503 to retry later; Discord failures release the claim. The remaining window (crash between Discord's 2xx and the mark) can double-post once. Closing it fully would need Discord to accept an idempotency key, which webhooks don't.
+
+## Fired alerts and deliveries are separate tables
+`alerts` (BigQuery subscription on the `alerts` topic) records what the rules decided, which is what T8/T9 are about. `alert_deliveries` (written via its own topic by the notifier) records Discord's answer and time, for T3. Bulk replays set `notify_discord=false` so Discord's webhook rate limit (~5 req / 2 s) can't distort T8/T9; deliveries are then recorded as `sent_to_discord=false`.
+
+## Discord webhook URL in Secret Manager, injected as env
+Cloud Run's `secret_key_ref` resolves `latest` at instance start, so rotating the webhook is `gcloud secrets versions add` + a new revision, with no code or Terraform change. The notifier identifies itself honestly (`User-Agent: ClutchWatch (...)`), as Discord requires of webhook clients.

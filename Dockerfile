@@ -6,5 +6,6 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev --no-install-project
 COPY ingest ingest
 COPY processor processor
+COPY notifier notifier
 ENV PATH=/app/.venv/bin:$PATH PYTHONUNBUFFERED=1
 CMD exec uvicorn processor.app:app --host 0.0.0.0 --port ${PORT:-8080}

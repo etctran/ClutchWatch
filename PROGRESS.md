@@ -30,3 +30,13 @@
 - Exit check: replayed `0022400001` (`--target-rate 50`, published from laptop). Redis via `GET /games/0022400001`: applied=538, BOS 116 / ATL 117. `bench/queries/counts_by_game.sql`: raw_events 538 = processed 538, redeliveries 0, final BOS 116 / ATL 117. DLQ pull: empty.
 - **Exit met.**
 - Finding for M5: one game drained at only ~20 events/s (applied 52 -> 233 -> 445 -> 538 at ~10 s intervals), so publish->processed latency on this run was p50 18.0 s / p99 25.8 s: pure queueing behind the per-key limit (ordered push = one message in flight per game). Not a T2 measurement (published from a laptop, single game, over-driven); see DECISIONS.
+
+## M4: Alerts (2026-11-13)
+- `processor/alerts.py`: CLOSE_LATE / WP_SWING / COMEBACK + 4-per-game cap as a pure function over a per-game JSON state in Redis (survives restarts). Evaluated only for events that advance game state (`apply() == 2`), never for late-entered plays or duplicates.
+- `notifier/app.py`: push endpoint, Redis claim on `alert_id` before posting, Discord 429/5xx -> release claim + 503 so Pub/Sub backs off. Deliveries go to `alert-deliveries` -> BigQuery `alert_deliveries` (for T3); fired alerts go to BigQuery `alerts` straight from the `alerts` topic (for T8/T9). Webhook in Secret Manager (`discord-webhook`).
+- Tests: 24 pass (alert rules incl. window/cooldown/cap/restart, notifier dedup + 429 retry).
+- Exit check: replayed OT game `0022400119` (BOS 132 @ IND 135 OT, BOS came back from 24 down), `--target-rate 20`. Expected alerts (computed offline with the same code): CLOSE_LATE Q4, COMEBACK BOS, WP_SWING, CLOSE_LATE OT. `bench/queries/alerts_for_game.sql`: exactly those 4, each fired once, each delivered once, Discord 204.
+- Duplicate check: replayed the same game a second time. wp_timeline: 1,328 rows / 664 distinct / 664 duplicate rows; Redis applied stays 664; alerts still 4, deliveries still 4.
+- **Exit met.**
+- Not T3: publish->Discord was ~23-25 s here, queueing behind the ~20 ev/s per-game drain rate (see M2 note).
+- Offline preview of the spec's rules over all of 2024-25 (`evaluate` run locally, NOT a T8/T9 measurement): CLOSE_LATE on 157/221 games decided by <=3 or OT (71%); 129/259 blowouts (>=20) got an alert; 2.23 alerts/game. WP_SWING (2,031 of 2,739 alerts) fills the 4-alert cap first. Decision on tuning deferred to M5.

@@ -12,10 +12,12 @@ import redis
 from fastapi import FastAPI, Response
 from google.cloud import pubsub_v1
 
+from processor.alerts import evaluate, new_state
 from processor.state import GameState
 from processor.winprob import WinProb
 
 STATE_TOPIC = os.environ.get("STATE_TOPIC", "")
+ALERTS_TOPIC = os.environ.get("ALERTS_TOPIC", "")
 REVISION = os.environ.get("K_REVISION", "local")
 # T5 chaos flag: after a successful apply, NACK this fraction so Pub/Sub redelivers
 FORCE_NACK_RATE = float(os.environ.get("FORCE_NACK_RATE", "0"))
@@ -27,13 +29,13 @@ publisher = pubsub_v1.PublisherClient(
     batch_settings=pubsub_v1.types.BatchSettings(max_messages=500, max_latency=0.005))
 
 
-def state_row(ev: dict, applied: bool) -> dict:
+def state_row(ev: dict, applied: bool, home_wp: float) -> dict:
     # Built from the event itself (scores are absolute), so a redelivered event yields the
     # same row; wp_timeline is read with DISTINCT event_id / MIN(processed_at).
     return {k: ev[k] for k in ("event_id", "game_id", "order_number", "period", "clock_seconds",
                                "home_team", "away_team", "home_score", "away_score",
                                "event_type", "source", "published_at")} | {
-        "home_wp": wp.home(ev["home_score"], ev["away_score"], ev["period"], ev["clock_seconds"]),
+        "home_wp": home_wp,
         "processed_at": datetime.now(timezone.utc).isoformat(),
         "duplicate": not applied,
         "revision": REVISION,
@@ -45,11 +47,27 @@ def push(body: dict) -> Response:
     # sync def: FastAPI runs it in a threadpool, so blocking Redis/Pub/Sub calls don't stall
     # the event loop and an instance serves concurrent pushes (one per game in flight).
     ev = json.loads(base64.b64decode(body["message"]["data"]))
-    applied = state.apply(ev)
-    row = state_row(ev, applied)
+    result = state.apply(ev)
+    applied = result > 0
+    home_wp = wp.home(ev["home_score"], ev["away_score"], ev["period"], ev["clock_seconds"])
+    row = state_row(ev, applied, home_wp)
     # Publish even for duplicates: if we crashed after the Redis apply but before this
     # publish, the redelivery is the only chance to get the row out.
-    publisher.publish(STATE_TOPIC, json.dumps(row).encode()).result()
+    futures = [publisher.publish(STATE_TOPIC, json.dumps(row).encode())]
+    if result == 2:  # only events that advance the game drive alerts (not late-entered plays)
+        alerts, st = evaluate(state.alert_state(ev["game_id"]) or new_state(), ev, home_wp)
+        for a in alerts:
+            msg = {"alert_id": a.alert_id, "game_id": a.game_id, "rule": a.rule, "text": a.text,
+                   "event_id": ev["event_id"], "home_wp": home_wp,
+                   "published_at": ev["published_at"], "alerted_at": row["processed_at"]}
+            futures.append(publisher.publish(ALERTS_TOPIC, json.dumps(msg).encode()))
+    for f in futures:
+        f.result()
+    if result == 2:
+        # Saved only after alerts are published: a crash in between re-fires on the next event
+        # with the same alert_id (deterministic), which the notifier dedups. Saving first could
+        # lose the alert.
+        state.save_alert_state(ev["game_id"], st)
     if applied and FORCE_NACK_RATE and random.random() < FORCE_NACK_RATE:
         return Response(status_code=500)
     return Response(status_code=204)

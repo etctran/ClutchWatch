@@ -31,6 +31,10 @@ resource "google_cloud_run_v2_service" "processor" {
         name  = "STATE_TOPIC"
         value = google_pubsub_topic.state_updates.id
       }
+      env {
+        name  = "ALERTS_TOPIC"
+        value = google_pubsub_topic.alerts.id
+      }
     }
   }
 }
