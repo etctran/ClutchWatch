@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from ingest.replayer import load_games
-from processor.alerts import MAX_ALERTS_PER_GAME, elapsed, evaluate, new_state
+from processor.alerts import MAX_ALERTS_PER_GAME, OTHER_CAP, elapsed, evaluate, new_state
 from processor.winprob import WinProb
 
 FIX = Path(__file__).parent / "fixtures"
@@ -38,25 +38,42 @@ def test_close_late_not_in_q3_or_blowout():
 
 
 def test_wp_swing_window_and_cooldown():
-    es = [ev(2, 700, 50, 50), ev(2, 600, 50, 50), ev(2, 540, 50, 50),  # 0.50 -> 0.80 in 160 s
-          ev(2, 500, 50, 50),   # another big move 40 s later: in cooldown
-          ev(3, 700, 50, 50),   # 0.90 but older points fell out of the 180 s window: no alert
-          ev(3, 690, 50, 50)]   # 0.90 -> 0.40 within window, cooldown over: alert
+    es = [ev(4, 700, 50, 50), ev(4, 600, 50, 50), ev(4, 540, 50, 50),  # 0.50 -> 0.80 in 160 s
+          ev(4, 500, 50, 50),   # another big move 40 s later: in cooldown
+          ev(4, 240, 50, 50),   # 0.90 but older points fell out of the 180 s window: no alert
+          ev(4, 230, 50, 50)]   # 0.90 -> 0.40 within window, cooldown over: alert
     fired, _ = run(es, [0.50, 0.60, 0.80, 0.50, 0.90, 0.40])
     assert [a.rule for a in fired] == ["WP_SWING", "WP_SWING"]
     assert "swung 30 pts in the last 3 min" in fired[0].text
     assert "swung 50 pts in the last 1 min" in fired[1].text
     # a 0.30 move spread over > 180 s doesn't count
-    fired, _ = run([ev(2, 700, 50, 50), ev(2, 500, 50, 50), ev(2, 300, 50, 50)], [0.5, 0.65, 0.8])
+    fired, _ = run([ev(4, 700, 50, 50), ev(4, 500, 50, 50), ev(4, 300, 50, 50)], [0.5, 0.65, 0.8])
+    assert fired == []
+
+
+def test_no_swing_or_comeback_before_q4():
+    # tuned on 2023-24: first-half swings/comebacks were most of the alerts in eventual blowouts
+    fired, _ = run([ev(2, 700, 50, 50), ev(2, 600, 50, 50), ev(3, 300, 40, 56), ev(3, 100, 54, 56)],
+                   [0.5, 0.9, 0.2, 0.6])
     assert fired == []
 
 
 def test_comeback_once_per_team():
-    es = [ev(2, 600, 30, 46), ev(3, 300, 60, 62), ev(3, 200, 66, 62), ev(3, 100, 60, 62)]
+    # deficit built in Q2 still counts; the alert itself only fires in Q4/OT
+    es = [ev(2, 600, 30, 46), ev(3, 300, 60, 62), ev(4, 300, 70, 72), ev(4, 250, 76, 72), ev(4, 190, 70, 72)]
     fired, st = run(es)
     assert [a.rule for a in fired] == ["COMEBACK"]
     assert "BOS was down 16 and is back within reach." in fired[0].text
     assert st["max_trail"]["home"] == 16
+
+
+def test_close_late_has_a_reserved_slot():
+    # Q4 swings and a comeback can use at most OTHER_CAP slots, so CLOSE_LATE still fires
+    es = [ev(4, 700, 60, 76), ev(4, 690, 60, 76), ev(4, 380, 60, 76), ev(4, 370, 70, 72), ev(4, 120, 72, 72)]
+    fired, st = run(es, [0.1, 0.9, 0.9, 0.1, 0.5])
+    rules = [a.rule for a in fired]
+    assert "CLOSE_LATE" in rules and rules.count("CLOSE_LATE") == 1
+    assert len(rules) - 1 <= OTHER_CAP and st["count"] <= MAX_ALERTS_PER_GAME
 
 
 def test_global_cap():

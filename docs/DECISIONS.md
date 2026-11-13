@@ -53,3 +53,21 @@ If the processor crashes after publishing alerts but before saving alert state, 
 
 ## Discord webhook URL in Secret Manager, injected as env
 Cloud Run's `secret_key_ref` resolves `latest` at instance start, so rotating the webhook is `gcloud secrets versions add` + a new revision, with no code or Terraform change. The notifier identifies itself honestly (`User-Agent: ClutchWatch (...)`), as Discord requires of webhook clients.
+
+## Alert rules tuned on 2023-24 (validation season), tested on 2024-25
+The spec's rules miss the spec's own T8/T9 targets. Diagnosis on 2023-24 (`uv run python -m bench.tune_alerts`): all 51 close games that missed CLOSE_LATE missed it because the 4-alert cap was already full, and 124 of the 142 alerts in eventual blowouts were WP_SWING in Q1-Q3 (the rest were early COMEBACKs by teams that lost big anyway). Fix, matching the product goal ("moments worth switching to happen late"):
+- WP_SWING and COMEBACK fire only in Q4/OT (deficits built earlier still count toward a comeback).
+- The global cap stays at 4, but non-CLOSE_LATE alerts may use at most 2 slots, so CLOSE_LATE always has room.
+- All thresholds (0.25 WP, 180 s window, 300 s cooldown, 15/3 comeback, 3:00/5 close-late) unchanged.
+
+2023-24, 1,230 games (210 close, 235 blowouts):
+
+| Variant | CLOSE_LATE recall | Blowouts alerted | Alerts/game |
+|---|---|---|---|
+| spec | 0.757 | 0.426 | 2.16 |
+| reserve slots only (other <= 2) | 1.000 | 0.426 | 1.75 |
+| late + reserve 3 | 1.000 | 0.047 | 1.45 |
+| **late + reserve 2 (chosen)** | **1.000** | **0.047** | **1.30** |
+| late + reserve 2 + swing 0.35 | 1.000 | 0.026 | 1.06 |
+
+Chosen as the fewest changes that meet all three targets with margin on alerts/game, without touching any spec threshold. Raising the swing threshold would buy more blowout margin, but it changes the spec's definition of a swing and was not needed on validation. The blowout margin is thin (11/235 = 4.7% vs 5%), so the held-out 2024-25 result may land on either side; it is reported as measured. Alternative considered: exempting CLOSE_LATE from the cap entirely. Same recall, but it breaks the spec's hard "max 4 alerts per game".

@@ -10,6 +10,11 @@ CLOSE_LATE_SECONDS, CLOSE_LATE_MARGIN = 180, 5
 SWING_WP, SWING_WINDOW, SWING_COOLDOWN = 0.25, 180, 300
 COMEBACK_DEFICIT, COMEBACK_WITHIN = 15, 3
 MAX_ALERTS_PER_GAME = 4
+# Tuning knobs (spec values: 1, 1, 4). Chosen values come from bench/tune_alerts.py on
+# 2023-24 only; see docs/DECISIONS.md. 2024-25 stays the held-out test season.
+SWING_MIN_PERIOD = 4
+COMEBACK_MIN_PERIOD = 4
+OTHER_CAP = 2  # non-CLOSE_LATE alerts may use at most this many of the MAX_ALERTS_PER_GAME slots
 
 
 @dataclass(frozen=True)
@@ -58,7 +63,7 @@ def evaluate(st: dict, ev: dict, wp: float) -> tuple[list[Alert], dict]:
     st["wp"] = [p for p in st["wp"] if t - p[0] <= SWING_WINDOW] + [[t, wp]]
     swing = max(st["wp"], key=lambda p: abs(wp - p[1]))
     cooled = st["last_swing"] is None or t - st["last_swing"] >= SWING_COOLDOWN
-    if abs(wp - swing[1]) >= SWING_WP and cooled:
+    if per >= SWING_MIN_PERIOD and abs(wp - swing[1]) >= SWING_WP and cooled:
         mins = max(1, round((t - swing[0]) / 60))
         out.append((f"WP_SWING:{int(t)}", "WP_SWING",
                     f"Home win prob swung {round(abs(wp - swing[1]) * 100)} pts in the last {mins} min."))
@@ -67,7 +72,8 @@ def evaluate(st: dict, ev: dict, wp: float) -> tuple[list[Alert], dict]:
     st["max_trail"]["home"] = max(st["max_trail"]["home"], -m)
     st["max_trail"]["away"] = max(st["max_trail"]["away"], m)
     for side, team, now_behind in (("home", ev["home_team"], -m), ("away", ev["away_team"], m)):
-        if st["max_trail"][side] >= COMEBACK_DEFICIT and now_behind <= COMEBACK_WITHIN:
+        if per >= COMEBACK_MIN_PERIOD and st["max_trail"][side] >= COMEBACK_DEFICIT \
+                and now_behind <= COMEBACK_WITHIN:
             out.append((f"COMEBACK:{side}", "COMEBACK",
                         f"{team} was down {st['max_trail'][side]} and "
                         + ("now leads." if now_behind < 0 else "is back within reach.")))
@@ -75,8 +81,9 @@ def evaluate(st: dict, ev: dict, wp: float) -> tuple[list[Alert], dict]:
     alerts = []
     for key, rule, detail in out:
         if key.startswith("WP_SWING") or key not in st["fired"]:
-            if st["count"] >= MAX_ALERTS_PER_GAME:
-                break
+            cap = MAX_ALERTS_PER_GAME if rule == "CLOSE_LATE" else OTHER_CAP
+            if st["count"] >= cap:
+                continue
             st["count"] += 1
             if rule == "WP_SWING":
                 st["last_swing"] = t
