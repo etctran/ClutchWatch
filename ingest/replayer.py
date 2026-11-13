@@ -5,10 +5,16 @@
 
 Games are interleaved like a real night (heap-merged by timeActual); within a game
 events always go out in orderNumber order.
+
+  --align          start every game at the same instant (merge by time since tip-off), so a
+                   season replays as ~1,230 simultaneous games. Load tests use this: ordered
+                   push caps each game at ~20 ev/s, so a real night's ~15 games can't reach
+                   1,000 ev/s no matter how fast the pipeline is (see docs/DECISIONS.md).
 """
 import argparse
 import heapq
 import time
+from dataclasses import replace
 from datetime import datetime
 
 import pandas as pd
@@ -19,9 +25,10 @@ COLS = ["gameId", "actionNumber", "orderNumber", "clock", "timeActual", "period"
         "actionType", "subType", "scoreHome", "scoreAway", "teamTricode", "shotResult"]
 
 
-def load_games(csv: str, games: set[str] | None = None, limit: int | None = None
-               ) -> list[list[tuple[float, GameEvent]]]:
-    df = pd.read_csv(csv, usecols=COLS, low_memory=False)
+def load_games(path: str, games: set[str] | None = None, limit: int | None = None,
+               align: bool = False) -> list[list[tuple[float, GameEvent]]]:
+    df = pd.read_parquet(path, columns=COLS) if path.endswith(".parquet") else \
+        pd.read_csv(path, usecols=COLS, low_memory=False)
     df["gid"] = df.gameId.astype(str).str.zfill(10)
     if games:
         df = df[df.gid.isin(games)]
@@ -29,8 +36,9 @@ def load_games(csv: str, games: set[str] | None = None, limit: int | None = None
     for gid, g in df.groupby("gid", sort=True):
         rows = g.sort_values("orderNumber").to_dict("records")
         home, away = infer_home_away(rows)
-        out.append([(datetime.fromisoformat(r["timeActual"]).timestamp(),
-                     normalize(r, gid, home, away, "replay")) for r in rows])
+        ts = [datetime.fromisoformat(r["timeActual"]).timestamp() for r in rows]
+        t0 = ts[0] if align else 0.0
+        out.append([(t - t0, normalize(r, gid, home, away, "replay")) for t, r in zip(ts, rows)])
         if limit and len(out) >= limit:
             break
     return out
@@ -63,7 +71,7 @@ def run(games, publish, speedup: float | None = None, target_rate: float | None 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--csv", required=True)
+    p.add_argument("--csv", required=True, help="season CSV or Parquet (same columns)")
     p.add_argument("--topic", required=True, help="projects/<p>/topics/<t>")
     mode = p.add_mutually_exclusive_group(required=True)
     mode.add_argument("--speedup", type=float)
@@ -71,11 +79,17 @@ def main() -> None:
     p.add_argument("--games", help="comma-separated game ids")
     p.add_argument("--limit-games", type=int)
     p.add_argument("--max-events", type=int)
+    p.add_argument("--align", action="store_true", help="start all games at once (load tests)")
+    p.add_argument("--run-tag", help="prefix game_id/event_id so each benchmark run has its own "
+                                     "state and dedup keys; queries filter on it")
     a = p.parse_args()
 
     from ingest.publisher import Publisher  # import here so tests don't need GCP libs/creds
-    games = load_games(a.csv, set(a.games.split(",")) if a.games else None, a.limit_games)
-    print(f"loaded {len(games)} games, {sum(map(len, games))} events", flush=True)
+    games = load_games(a.csv, set(a.games.split(",")) if a.games else None, a.limit_games, a.align)
+    if a.run_tag:
+        games = [[(t, replace(e, game_id=f"{a.run_tag}-{e.game_id}", event_id=f"{a.run_tag}-{e.event_id}"))
+                  for t, e in g] for g in games]
+    print(f"loaded {len(games)} games, {sum(map(len, games))} events, tag={a.run_tag}", flush=True)
     pub = Publisher(a.topic)
     t = time.monotonic()
     n = run(games, pub.publish, a.speedup, a.target_rate, a.max_events)

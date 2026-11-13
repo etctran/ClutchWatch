@@ -4,8 +4,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null)}"
 REGION="${REGION:-us-central1}"
-VARS=(-var "project=$PROJECT" -var "region=$REGION")
+VARS=(-var "project=$PROJECT" -var "region=$REGION" ${TF_EXTRA_VARS:-})
 tf() { terraform -chdir=infra "$@"; }
+[ -f data/replay/season_2024.parquet ] || SEASONS=2024 ./scripts/fetch_data.sh
 
 tf init -input=false >/dev/null
 tf apply -auto-approve -input=false "${VARS[@]}" -target=google_artifact_registry_repository.images

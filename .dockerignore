@@ -1,7 +1,9 @@
 .venv
-data
+.git
+**/__pycache__
+data/raw
+data/cache
+data/rows
 tests
 infra
 docs
-.git
-**/__pycache__

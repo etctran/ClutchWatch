@@ -35,6 +35,10 @@ resource "google_cloud_run_v2_service" "processor" {
         name  = "ALERTS_TOPIC"
         value = google_pubsub_topic.alerts.id
       }
+      env {
+        name  = "FORCE_NACK_RATE"
+        value = tostring(var.force_nack_rate)
+      }
     }
   }
 }
@@ -44,4 +48,35 @@ resource "google_cloud_run_v2_service_iam_member" "pusher_invokes_processor" {
   location = var.region
   role     = "roles/run.invoker"
   member   = "serviceAccount:${google_service_account.pusher.email}"
+}
+
+variable "force_nack_rate" {
+  type        = number
+  default     = 0
+  description = "T5 chaos: fraction of successfully applied events the processor NACKs anyway"
+}
+
+# Replayer runs on Google's NTP-synced machines so published_at/processed_at share a clock.
+#   gcloud run jobs execute replayer --region us-central1 --args=<replayer flags>
+resource "google_cloud_run_v2_job" "replayer" {
+  name                = "replayer"
+  location            = var.region
+  deletion_protection = false
+  template {
+    task_count = 1
+    template {
+      service_account = google_service_account.publisher.email
+      max_retries     = 0
+      timeout         = "3600s"
+      containers {
+        image   = var.image
+        command = ["python", "-m", "ingest.replayer"]
+        args = ["--csv", "data/replay/season_2024.parquet", "--topic", google_pubsub_topic.game_events.id,
+        "--target-rate", "100", "--limit-games", "1"]
+        resources {
+          limits = { cpu = "2", memory = "4Gi" }
+        }
+      }
+    }
+  }
 }

@@ -30,3 +30,19 @@ def test_replayer_publishes_full_game_in_order():
     assert [e.order_number for e in sent] == sorted(e.order_number for e in sent)
     assert (sent[-1].home_team, sent[-1].away_team) == ("BOS", "ATL")
     assert (sent[-1].home_score, sent[-1].away_score) == (116, 117)
+
+
+def test_align_starts_games_together(tmp_path):
+    import pandas as pd
+    df = pd.read_csv(FIX / "hist_22400001.csv")
+    two = pd.concat([df, df.assign(gameId=22400002, timeActual=df.timeActual.str.replace("2024-11-13", "2024-11-20"))])
+    two.to_parquet(tmp_path / "s.parquet")
+    games = load_games(str(tmp_path / "s.parquet"), align=True)
+    assert [g[0][0] for g in games] == [0.0, 0.0]
+    sent = []
+    run(games, sent.append, target_rate=1e9)
+    assert len(sent) == 2 * 538
+    assert {e.game_id for e in sent[:4]} == {"0022400001", "0022400002"}  # interleaved, not one after the other
+    for gid in ("0022400001", "0022400002"):
+        orders = [e.order_number for e in sent if e.game_id == gid]
+        assert orders == sorted(orders)
