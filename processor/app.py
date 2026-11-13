@@ -77,3 +77,13 @@ def push(body: dict) -> Response:
 def game(game_id: str) -> dict:
     """Current Redis state for one game (verification; service requires IAM auth)."""
     return state.get(game_id)
+
+
+@app.get("/games")
+def games(prefix: str) -> dict:
+    """All game states whose id starts with `prefix` (benchmark verification, IAM-protected)."""
+    keys = list(state.r.scan_iter(match=f"game:{prefix}*", count=1000))
+    pipe = state.r.pipeline()
+    for k in keys:
+        pipe.hgetall(k)
+    return {k.removeprefix("game:"): v for k, v in zip(keys, pipe.execute())}
