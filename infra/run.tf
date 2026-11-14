@@ -12,8 +12,9 @@ resource "google_cloud_run_v2_service" "processor" {
     service_account                  = google_service_account.processor.email
     max_instance_request_concurrency = 80
     scaling {
-      min_instance_count = 0
-      max_instance_count = 10
+      # pull: fixed instances that hold StreamingPull streams (no requests to scale on)
+      min_instance_count = var.processor_mode == "pull" ? 2 : 0
+      max_instance_count = var.processor_mode == "pull" ? 2 : 10
     }
     vpc_access { # Direct VPC egress to reach Memorystore's private IP
       network_interfaces {
@@ -25,7 +26,14 @@ resource "google_cloud_run_v2_service" "processor" {
     containers {
       image = var.image
       resources {
-        limits = { cpu = "1", memory = "512Mi" }
+        cpu_idle = var.processor_mode == "push" # pull does its work outside requests
+        limits   = { cpu = "1", memory = "1Gi" }
+      }
+      env {
+        name = "PULL_SUBSCRIPTION"
+        # built as a string, not a resource reference: in push mode the subscription references
+        # this service's URL, and a reference back would be a cycle
+        value = var.processor_mode == "pull" ? "projects/${var.project}/subscriptions/game-events-processor" : ""
       }
       env {
         name  = "REDIS_HOST"

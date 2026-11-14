@@ -2,16 +2,30 @@ resource "google_pubsub_topic" "game_events" { name = "game-events" }
 resource "google_pubsub_topic" "state_updates" { name = "state-updates" }
 resource "google_pubsub_topic" "game_events_dlq" { name = "game-events-dlq" }
 
-# Processor: push, ordered per game (ordering_key = game_id), DLQ after 5 attempts
+# Processor subscription, ordered per game (ordering_key = game_id), DLQ after 5 attempts.
+# processor_mode = "pull": the processor runs a StreamingPull client (measured faster, see DECISIONS).
+# processor_mode = "push": Pub/Sub POSTs to the processor's URL (the original design).
+variable "processor_mode" {
+  type    = string
+  default = "pull"
+  validation {
+    condition     = contains(["push", "pull"], var.processor_mode)
+    error_message = "processor_mode must be push or pull"
+  }
+}
+
 resource "google_pubsub_subscription" "processor" {
   name                    = "game-events-processor"
   topic                   = google_pubsub_topic.game_events.id
   enable_message_ordering = true
   ack_deadline_seconds    = 30
 
-  push_config {
-    push_endpoint = google_cloud_run_v2_service.processor.uri
-    oidc_token { service_account_email = google_service_account.pusher.email }
+  dynamic "push_config" {
+    for_each = var.processor_mode == "push" ? [1] : []
+    content {
+      push_endpoint = google_cloud_run_v2_service.processor.uri
+      oidc_token { service_account_email = google_service_account.pusher.email }
+    }
   }
   dead_letter_policy {
     dead_letter_topic     = google_pubsub_topic.game_events_dlq.id
@@ -69,6 +83,11 @@ resource "google_pubsub_topic_iam_member" "agent_dlq_publish" {
   topic  = google_pubsub_topic.game_events_dlq.id
   role   = "roles/pubsub.publisher"
   member = local.pubsub_agent
+}
+resource "google_pubsub_subscription_iam_member" "processor_pulls" {
+  subscription = google_pubsub_subscription.processor.id
+  role         = "roles/pubsub.subscriber"
+  member       = "serviceAccount:${google_service_account.processor.email}"
 }
 resource "google_pubsub_subscription_iam_member" "agent_processor_sub" {
   subscription = google_pubsub_subscription.processor.id

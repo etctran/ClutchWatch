@@ -1,16 +1,24 @@
-"""Pub/Sub push endpoint: apply GameEvent to Redis state, emit a state update.
+"""Processor: apply GameEvent to Redis state, emit a state update, evaluate alerts.
 
-2xx acks the message; anything else makes Pub/Sub redeliver (DLQ after 5 attempts).
+Two delivery modes, same `process()`:
+- push (PULL_SUBSCRIPTION unset): Pub/Sub POSTs each message; 2xx acks, anything else redelivers.
+- pull (PULL_SUBSCRIPTION set): a StreamingPull subscriber runs inside this service; process()
+  True -> ack, False/exception -> nack. Ordering keys still hold: the client hands a game's
+  next message to the callback only after the previous one is acked or nacked.
+Either way, DLQ after 5 delivery attempts.
 """
 import base64
 import json
 import os
 import random
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import redis
 from fastapi import FastAPI, Response
 from google.cloud import pubsub_v1
+from google.cloud.pubsub_v1.subscriber.scheduler import ThreadScheduler
 
 from processor.alerts import evaluate, new_state
 from processor.state import GameState
@@ -21,8 +29,8 @@ ALERTS_TOPIC = os.environ.get("ALERTS_TOPIC", "")
 REVISION = os.environ.get("K_REVISION", "local")
 # T5 chaos flag: after a successful apply, NACK this fraction so Pub/Sub redelivers
 FORCE_NACK_RATE = float(os.environ.get("FORCE_NACK_RATE", "0"))
-
-app = FastAPI()
+PULL_SUBSCRIPTION = os.environ.get("PULL_SUBSCRIPTION", "")
+PULL_THREADS = int(os.environ.get("PULL_THREADS", "64"))
 wp = WinProb()
 state = GameState(redis.Redis(host=os.environ.get("REDIS_HOST", "localhost"), decode_responses=True))
 publisher = pubsub_v1.PublisherClient(
@@ -42,11 +50,8 @@ def state_row(ev: dict, applied: bool, home_wp: float) -> dict:
     }
 
 
-@app.post("/")
-def push(body: dict) -> Response:
-    # sync def: FastAPI runs it in a threadpool, so blocking Redis/Pub/Sub calls don't stall
-    # the event loop and an instance serves concurrent pushes (one per game in flight).
-    ev = json.loads(base64.b64decode(body["message"]["data"]))
+def process(ev: dict) -> bool:
+    """Apply one event end to end. True = ack it, False = make Pub/Sub redeliver it."""
     result = state.apply(ev)
     applied = result > 0
     home_wp = wp.home(ev["home_score"], ev["away_score"], ev["period"], ev["clock_seconds"])
@@ -68,9 +73,44 @@ def push(body: dict) -> Response:
         # with the same alert_id (deterministic), which the notifier dedups. Saving first could
         # lose the alert.
         state.save_alert_state(ev["game_id"], st)
-    if applied and FORCE_NACK_RATE and random.random() < FORCE_NACK_RATE:
-        return Response(status_code=500)
-    return Response(status_code=204)
+    return not (applied and FORCE_NACK_RATE and random.random() < FORCE_NACK_RATE)
+
+
+def _on_message(msg) -> None:
+    try:
+        ok = process(json.loads(msg.data))
+    except Exception as e:  # nack: redelivered, DLQ after 5 attempts
+        print(f"process failed for {msg.message_id}: {e!r}", flush=True)
+        ok = False
+    msg.ack() if ok else msg.nack()
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    future = None
+    if PULL_SUBSCRIPTION:
+        subscriber = pubsub_v1.SubscriberClient()
+        future = subscriber.subscribe(
+            PULL_SUBSCRIPTION, _on_message,
+            flow_control=pubsub_v1.types.FlowControl(max_messages=4000),
+            # default is 10 threads; each callback mostly waits on Redis/Pub/Sub I/O
+            scheduler=ThreadScheduler(ThreadPoolExecutor(PULL_THREADS)))
+        print(f"pulling {PULL_SUBSCRIPTION} with {PULL_THREADS} threads", flush=True)
+    yield
+    if future:  # SIGTERM (new revision / scale-in): stop pulling; un-acked messages get redelivered
+        future.cancel()
+        future.result(timeout=20)
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.post("/")
+def push(body: dict) -> Response:
+    # sync def: FastAPI runs it in a threadpool, so blocking Redis/Pub/Sub calls don't stall
+    # the event loop and an instance serves concurrent pushes (one per game in flight).
+    ok = process(json.loads(base64.b64decode(body["message"]["data"])))
+    return Response(status_code=204 if ok else 500)
 
 
 @app.get("/games/{game_id}")
