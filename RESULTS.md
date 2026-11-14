@@ -12,12 +12,13 @@ pipeline metrics, the BigQuery query in `bench/queries/`) is listed with it.
 | T5 | Duplicate safety, 10% forced redelivery | 0 double-applied; final scores match | 68,797 redeliveries; 0 double-applied, 0 lost; 1,230/1,230 final scores exact; alerts identical to clean run (1,615 = 1,615) | Yes |
 | T6 | Crash recovery (redeploy mid-replay) | no loss, correct final state; stretch recovery < 30 s | 0 lost of 686,008; 1,230/1,230 exact; alerts identical; no throughput gap; latency back to baseline ~70 s after the redeploy started | Yes; stretch: no stall at all, latency bump ~40 s |
 | T3 | Alert latency, publish -> Discord accepted | p95 < 2 s (stretch < 1 s) | 10 OT games at real pace x30: p50 385 ms, p95 914 ms, 36/36 delivered once. Same games over-driven at 50 ev/s into 1-2 games: p95 30.1 s | Yes (+ stretch) at real pace; no when one game is over-driven |
+| T11 | Reproducible deploy | one script stands it up; stretch < 10 min | `scripts/deploy.sh` from the torn-down state: 6 min 49 s (409 s) to a serving pull-mode pipeline incl. image build; first-ever apply of 21 resources was 6 min 27 s | Yes (+ stretch) |
 | T4 | Event loss, full season | 0 lost of ~600K | 0 lost of 686,008 in each of 5 full-season runs (load1, chaos5, chaos6, chaos7, load2); DLQ empty; 1,230/1,230 games correct in Redis every time | Yes |
-| T7 | Model quality | Brier beats baselines; calibration <= 0.05/decile | Brier 0.1641 (baselines 0.2500 / 0.2497); max decile error 0.0310 | Yes (+ stretch) |
+| T7 | Model quality | Brier beats baselines; calibration <= 0.05/decile | 2024-25: Brier 0.1641 (baselines 0.2500 / 0.2497), max decile error 0.0310. 2025-26 (fresh): 0.1612 (0.2500 / 0.2485), 0.0232 | Yes (+ stretch), both seasons |
 | T8 | Alert recall | >= 90% of games <=3 pts or OT get CLOSE_LATE | 221/221 = 100% | Yes (+ stretch) |
 | T9 | Alert spam | <= 5% of blowouts alerted; <= 1.5 alerts/game | 17/259 = 6.6% of blowouts; 1.31 alerts/game | **No** (blowouts, narrowly); alerts/game yes |
 
-T10, T11: see below / pending.
+T10: pending (billing export lags ~1 day).
 
 ## Load run `load1` (T1, T2, T4, T8, T9)
 
@@ -74,6 +75,32 @@ Rules as tuned on 2023-24 (DECISIONS: "Alert rules tuned on 2023-24"); 2024-25 i
 | 221 | 221 | **100%** | 259 | 17 | **6.6%** | **1.31** | 4 |
 
 T8 met (stretch too). T9 alerts/game met; blowout rate missed narrowly: 6.6% vs 5% (validation had 4.7%). For reference, the spec's untuned rules on the same season (offline, same `evaluate` code): 71% recall, 50% of blowouts alerted, 2.23/game.
+
+## T2, second attempt: StreamingPull instead of push
+
+Hypothesis after the four push runs: the time was in Pub/Sub's push dispatch, so a StreamingPull client inside the processor (`processor_mode = "pull"`, same `process()` code, same ordering keys, same Redis apply, same DLQ) should remove it.
+
+### `pull1`: 2 instances x 1 vCPU, 64 threads, 4,000 outstanding per instance
+
+```
+TF_EXTRA_VARS="-var notify_discord=false" ./scripts/deploy.sh   # processor_mode defaults to pull
+bench/run_load.sh pull1 1000                                    # 2026-11-14 13:45-13:58 UTC
+```
+
+| | result |
+|---|---|
+| correctness | 686,008 / 686,008 processed, 0 lost, DLQ 0, 1,230/1,230 final scores exact, 5 natural redeliveries |
+| throughput (`t1_throughput.sql`) | in 1,000.1 ev/s, out **936.1 ev/s** over the 10-min window: the processor fell behind |
+| latency (`t2_latency.sql`) | p50 **11,169 ms**, p90 47 s, p99 291 s, max 580 s |
+| by minute | p50 4.4 s / 2.6 s in minutes 0-1, then 13-14 s every minute from minute 3; p99 grew to 479 s |
+| why (Cloud Monitoring) | both instances at **1.04 CPU** (of 1.0) from minute 6 to the end; `num_undelivered_messages` grew linearly to 40,200; `oldest_unacked_message_age` grew 60 s per minute to 477 s |
+| also | the deploy that started the run left the previous revision serving until minute 5; 719 `expired_ack_deadlines` during the handover |
+
+**Worse than push on every latency number.** The Python Pub/Sub client is CPU-bound at roughly 470 events/s per vCPU here (lease management for thousands of outstanding messages, per-key ordered dispatch, 32-64 threads under the GIL, plus the handler's own ~2 ms). Push had Cloud Run autoscaling to 9-10 instances; this pull deployment had 2 fixed vCPUs, so the comparison was not like for like. Even before the backlog formed (minute 1, p50 2.6 s) pull was slower than push's steady state (p50 0.8-1.8 s).
+
+### `pull2`: 4 instances x 2 vCPU, 32 threads, 1,000 outstanding per instance
+
+(pending)
 
 ## T3: alert latency (runs `t3a`, `t3b`; `bench/queries/t3_alert_latency.sql`)
 
@@ -146,6 +173,14 @@ Throughput never dropped (every 10 s bucket processed ~10,000 events, i.e. ~1,00
 
 A first attempt (`chaos6`) used a fixed `sleep` before redeploying; the laptop slept, the redeploy landed 42 min after that replay had ended, so it tested nothing. It still counts as a clean full-season run: 0 lost, 1,230/1,230 exact.
 
+## T11: reproducibility
+
+```
+time TF_EXTRA_VARS="-var notify_discord=false" ./scripts/deploy.sh    # 2026-11-14 13:29:36 -> 13:36:25 UTC
+```
+
+From the state `scripts/teardown.sh redis` leaves (no Redis, no Cloud Run services, no processor/notifier subscriptions; topics, BigQuery, IAM and WIF still there): **409 s** to a serving pipeline, including `terraform init`, the Cloud Build image build (~1 min) and the release. Memorystore creation is most of it (4-5 min). The first-ever apply on 2026-11-12 (21 resources from nothing, before the notifier/replayer/WIF existed) took 6 min 27 s plus a ~1 min build. Not timed: a completely fresh GCP project (APIs, budget, Secret Manager value), which needs a human for billing and the Discord webhook anyway.
+
 ## T7: Model quality
 
 Command (2026-11-12):
@@ -162,6 +197,7 @@ scoring event. Trained on 415,765 scoring events from 3,540 games (2020-21 to 20
 |---|---|---|---|---|---|---|
 | val 2023-24 | 145,642 | 1,230 | 0.1614 | 0.2500 | 0.2420 | 0.0438 |
 | **test 2024-25** | 144,139 | 1,230 | **0.1641** | 0.2500 | 0.2497 | **0.0310** |
+| **test 2025-26** (added 2026-11-14; never used for any tuning) | 148,450 | 1,230 | **0.1612** | 0.2500 | 0.2485 | **0.0232** |
 
 Target met: test Brier beats both baselines, every decile within 0.05. Stretch (Brier ≤ 0.18) met.
 

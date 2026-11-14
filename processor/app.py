@@ -30,7 +30,8 @@ REVISION = os.environ.get("K_REVISION", "local")
 # T5 chaos flag: after a successful apply, NACK this fraction so Pub/Sub redelivers
 FORCE_NACK_RATE = float(os.environ.get("FORCE_NACK_RATE", "0"))
 PULL_SUBSCRIPTION = os.environ.get("PULL_SUBSCRIPTION", "")
-PULL_THREADS = int(os.environ.get("PULL_THREADS", "64"))
+PULL_THREADS = int(os.environ.get("PULL_THREADS", "32"))
+PULL_MAX_MESSAGES = int(os.environ.get("PULL_MAX_MESSAGES", "1000"))  # outstanding per instance
 wp = WinProb()
 state = GameState(redis.Redis(host=os.environ.get("REDIS_HOST", "localhost"), decode_responses=True))
 publisher = pubsub_v1.PublisherClient(
@@ -92,10 +93,10 @@ async def lifespan(_app):
         subscriber = pubsub_v1.SubscriberClient()
         future = subscriber.subscribe(
             PULL_SUBSCRIPTION, _on_message,
-            flow_control=pubsub_v1.types.FlowControl(max_messages=4000),
+            flow_control=pubsub_v1.types.FlowControl(max_messages=PULL_MAX_MESSAGES),
             # default is 10 threads; each callback mostly waits on Redis/Pub/Sub I/O
             scheduler=ThreadScheduler(ThreadPoolExecutor(PULL_THREADS)))
-        print(f"pulling {PULL_SUBSCRIPTION} with {PULL_THREADS} threads", flush=True)
+        print(f"pulling {PULL_SUBSCRIPTION} with {PULL_THREADS} threads, {PULL_MAX_MESSAGES} outstanding", flush=True)
     yield
     if future:  # SIGTERM (new revision / scale-in): stop pulling; un-acked messages get redelivered
         future.cancel()
