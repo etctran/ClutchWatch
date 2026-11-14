@@ -11,15 +11,17 @@ from ingest.replayer import load_games
 from processor.winprob import WinProb
 
 LATE = {"SWING_MIN_PERIOD": 4, "COMEBACK_MIN_PERIOD": 4}
+R2 = {**LATE, "OTHER_CAP": 2}
 VARIANTS = {
-    "spec": {},
-    "reserve(other<=3)": {"OTHER_CAP": 3},
-    "reserve(other<=2)": {"OTHER_CAP": 2},
-    "late+reserve3": {**LATE, "OTHER_CAP": 3},
-    "late+reserve2": {**LATE, "OTHER_CAP": 2},
-    "late+reserve2+swing.30": {**LATE, "OTHER_CAP": 2, "SWING_WP": 0.30},
-    "late+reserve2+swing.35": {**LATE, "OTHER_CAP": 2, "SWING_WP": 0.35},
-    "late+reserve1": {**LATE, "OTHER_CAP": 1},
+    "spec": {"SWING_MIN_PERIOD": 1, "COMEBACK_MIN_PERIOD": 1, "OTHER_CAP": 4, "SWING_WP": 0.25, "COMEBACK_DEFICIT": 15},
+    "v1 late+reserve2 (shipped first)": R2,
+    "swing.30": {**R2, "SWING_WP": 0.30},
+    "swing.35": {**R2, "SWING_WP": 0.35},
+    "swing.40": {**R2, "SWING_WP": 0.40},
+    "swing.35+cb18": {**R2, "SWING_WP": 0.35, "COMEBACK_DEFICIT": 18},
+    "swing.35+cb20": {**R2, "SWING_WP": 0.35, "COMEBACK_DEFICIT": 20},
+    "swing.35+cap1": {**LATE, "OTHER_CAP": 1, "SWING_WP": 0.35},
+    "swing.40+cb20": {**R2, "SWING_WP": 0.40, "COMEBACK_DEFICIT": 20},
 }
 
 

@@ -1,12 +1,12 @@
 -- T8 recall + T9 precision/spam for one full-season run, against source final scores.
--- bq query --use_legacy_sql=false --parameter=tag::load1 < bench/queries/t8_t9_alerts.sql
+-- bq query --use_legacy_sql=false --parameter=tag::load1 --parameter=season:INT64:2024 < bench/queries/t8_t9_alerts.sql
 WITH a AS (
   SELECT SUBSTR(game_id, LENGTH(@tag) + 2) game_id, COUNT(DISTINCT alert_id) n,
          COUNTIF(rule = 'CLOSE_LATE') > 0 close_late
   FROM clutchwatch.alerts WHERE STARTS_WITH(game_id, CONCAT(@tag, '-')) GROUP BY 1
 ), g AS (
   SELECT s.*, ABS(home_score - away_score) margin, IFNULL(a.n, 0) alerts, IFNULL(a.close_late, FALSE) close_late
-  FROM clutchwatch.source_games s LEFT JOIN a USING (game_id)
+  FROM clutchwatch.source_games s LEFT JOIN a USING (game_id) WHERE s.season = @season
 )
 SELECT
   COUNTIF(margin <= 3 OR max_period > 4) AS close_games,

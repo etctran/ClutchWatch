@@ -1,7 +1,7 @@
 -- T4: event loss. Source vs published (raw_events) vs processed (wp_timeline), distinct event_id.
--- bq query --use_legacy_sql=false --parameter=tag::load1 < bench/queries/t4_loss.sql
+-- bq query --use_legacy_sql=false --parameter=tag::load1 --parameter=season:INT64:2024 < bench/queries/t4_loss.sql
 SELECT
-  (SELECT SUM(events) FROM clutchwatch.source_games) AS source_events,
+  (SELECT SUM(events) FROM clutchwatch.source_games WHERE season = @season) AS source_events,
   (SELECT COUNT(DISTINCT event_id) FROM clutchwatch.raw_events WHERE STARTS_WITH(game_id, CONCAT(@tag, '-'))) AS raw_distinct,
   (SELECT COUNT(*) FROM clutchwatch.raw_events WHERE STARTS_WITH(game_id, CONCAT(@tag, '-'))) AS raw_rows,
   (SELECT COUNT(DISTINCT event_id) FROM clutchwatch.wp_timeline WHERE STARTS_WITH(game_id, CONCAT(@tag, '-'))) AS processed_distinct,

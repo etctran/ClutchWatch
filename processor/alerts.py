@@ -7,8 +7,8 @@ import json
 from dataclasses import dataclass
 
 CLOSE_LATE_SECONDS, CLOSE_LATE_MARGIN = 180, 5
-SWING_WP, SWING_WINDOW, SWING_COOLDOWN = 0.25, 180, 300
-COMEBACK_DEFICIT, COMEBACK_WITHIN = 15, 3
+SWING_WP, SWING_WINDOW, SWING_COOLDOWN = 0.35, 180, 300  # spec: 0.25; retuned, see DECISIONS
+COMEBACK_DEFICIT, COMEBACK_WITHIN = 18, 3  # spec: 15; retuned, see DECISIONS
 MAX_ALERTS_PER_GAME = 4
 # Tuning knobs (spec values: 1, 1, 4). Chosen values come from bench/tune_alerts.py on
 # 2023-24 only; see docs/DECISIONS.md. 2024-25 stays the held-out test season.
