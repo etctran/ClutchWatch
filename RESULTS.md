@@ -5,20 +5,21 @@ pipeline metrics, the BigQuery query in `bench/queries/`) is listed with it.
 
 ## Summary
 
+Final design: push delivery (`processor_mode = "push"`), alert rules as retuned on 2023-24 (DECISIONS). Seasons: model trained 2020-21..2022-23, tuned on 2023-24, tested on 2024-25 and on 2025-26 (never used for any choice).
+
 | # | Metric | Target | Measured | Met? |
 |---|---|---|---|---|
-| T1 | Sustained throughput | >= 1,000 ev/s for 10 min | 686,008 events published in 686 s; processed avg 999.5 ev/s over the 10-min window (per-second min 361, p5 475) | Yes (average); see per-second note |
-| T2 | Publish -> state updated | p50 < 150 ms, p99 < 1 s | 4 full runs at 1,000 ev/s: p50 1,328 / 779 / 85 / 756 ms; p99 9.3 / 7.0 / 7.1 / 15.1 s (processor's own request time p50 23 ms) | **No** (p50 met in 1 of 4 runs, p99 in none); time is spent inside Pub/Sub before push dispatch |
-| T5 | Duplicate safety, 10% forced redelivery | 0 double-applied; final scores match | 68,797 redeliveries; 0 double-applied, 0 lost; 1,230/1,230 final scores exact; alerts identical to clean run (1,615 = 1,615) | Yes |
-| T6 | Crash recovery (redeploy mid-replay) | no loss, correct final state; stretch recovery < 30 s | 0 lost of 686,008; 1,230/1,230 exact; alerts identical; no throughput gap; latency back to baseline ~70 s after the redeploy started | Yes; stretch: no stall at all, latency bump ~40 s |
-| T3 | Alert latency, publish -> Discord accepted | p95 < 2 s (stretch < 1 s) | 10 OT games at real pace x30: p50 385 ms, p95 914 ms, 36/36 delivered once. Same games over-driven at 50 ev/s into 1-2 games: p95 30.1 s | Yes (+ stretch) at real pace; no when one game is over-driven |
-| T11 | Reproducible deploy | one script stands it up; stretch < 10 min | `scripts/deploy.sh` from the torn-down state: 6 min 49 s (409 s) to a serving pull-mode pipeline incl. image build; first-ever apply of 21 resources was 6 min 27 s | Yes (+ stretch) |
-| T4 | Event loss, full season | 0 lost of ~600K | 0 lost of 686,008 in each of 5 full-season runs (load1, chaos5, chaos6, chaos7, load2); DLQ empty; 1,230/1,230 games correct in Redis every time | Yes |
-| T7 | Model quality | Brier beats baselines; calibration <= 0.05/decile | 2024-25: Brier 0.1641 (baselines 0.2500 / 0.2497), max decile error 0.0310. 2025-26 (fresh): 0.1612 (0.2500 / 0.2485), 0.0232 | Yes (+ stretch), both seasons |
-| T8 | Alert recall | >= 90% of games <=3 pts or OT get CLOSE_LATE | 221/221 = 100% | Yes (+ stretch) |
-| T9 | Alert spam | <= 5% of blowouts alerted; <= 1.5 alerts/game | 17/259 = 6.6% of blowouts; 1.31 alerts/game | **No** (blowouts, narrowly); alerts/game yes |
-
-T10: pending (billing export lags ~1 day).
+| T1 | Sustained throughput | >= 1,000 ev/s for 10 min | Every full-season run kept up: e.g. `load1` 686,008 events in 686 s, processed avg 999.5 ev/s (per-second min 361); `fresh25` 999.7 ev/s (min 583) | Yes (average) |
+| T2 | Publish -> state updated | p50 < 150 ms, p99 < 1 s | Push, 5 full runs at 1,000 ev/s: p50 1,328 / 779 / 85 / 756 / 461 ms, p99 7-15 s. StreamingPull, 2 runs: p50 11.2 s, 2.2 s. Processor's own time p50 23 ms | **No** (p50 met in 1 of 7 runs, p99 in none); time is inside Pub/Sub before delivery, see sections below |
+| T3 | Alert latency, publish -> Discord accepted | p95 < 2 s (stretch < 1 s) | 10 OT games at real pace x30: p50 385 ms, p95 914 ms, 36/36 delivered once (same games over-driven at 50 ev/s into 1-2 games: p95 30.1 s) | Yes (+ stretch) |
+| T4 | Event loss | 0 lost | 0 lost in each of 8 full-season runs (7 x 686,008 events on 2024-25, 1 x 708,268 on 2025-26); DLQ empty; every game's final Redis state exact every time | Yes |
+| T5 | Duplicate safety, 10% forced redelivery | 0 double-applied; final scores match | 68,797 redeliveries; 0 double-applied, 0 lost; 1,230/1,230 final scores exact; alerts identical to a clean run (1,615 = 1,615) | Yes |
+| T6 | Crash recovery (redeploy mid-replay) | no loss, correct final state; stretch recovery < 30 s | 0 lost; 1,230/1,230 exact; alerts identical; no throughput gap; latency back to baseline ~70 s after the redeploy started | Yes; stretch: no stall, latency bump ~40 s |
+| T7 | Model quality | Brier beats baselines; calibration <= 0.05/decile | 2024-25: Brier 0.1641 (baselines 0.2500 / 0.2497), max decile error 0.031. 2025-26: 0.1612 (0.2500 / 0.2485), 0.023 | Yes (+ stretch), both seasons |
+| T8 | Alert recall | >= 90% of games <= 3 pts or OT get CLOSE_LATE | 2025-26 (final rules): 210/210 = 100%. 2024-25 (first tuning): 221/221 | Yes (+ stretch) |
+| T9 | Alert spam | <= 5% of blowouts alerted; <= 1.5 alerts/game | 2025-26 (final rules): **10/281 = 3.6%**, **0.97/game**. 2024-25 (first tuning): 17/259 = 6.6%, 1.31/game | **Yes** on the held-out season (missed with the first tuning) |
+| T10 | Cost | campaign < $10; idle ~ $0 | pending: billing report lags ~1 day | pending |
+| T11 | Reproducible deploy | one script stands it up; stretch < 10 min | `scripts/deploy.sh` from the torn-down state: 409 s (6 min 49 s) incl. image build | Yes (+ stretch) |
 
 ## Load run `load1` (T1, T2, T4, T8, T9)
 
@@ -116,6 +117,24 @@ bench/run_load.sh pull2 1000     # 2026-11-14 14:06-14:22 UTC; single revision s
 Resourced like push, pull is still slower: p50 2.2 s against push's 0.8-1.3 s (best push run 85 ms). The steady ~2,000-message undelivered backlog with idle clients says the wait is on the Pub/Sub side before messages reach the stream, which this project can't change. T1 improves (smoother per-second output), T2 gets worse.
 
 **Decision:** `processor_mode` defaults back to `push`; pull stays in the code and Terraform for comparison. The latency hypothesis was wrong and the two runs that disproved it are the result. T2 remains missed on the final design.
+
+## Fresh season run `fresh25` (T8/T9 final rules; T1/T2/T4 again)
+
+The alert retune was chosen on 2023-24; 2024-25 had already been looked at, so the test is 2025-26 (1,230 games, 708,268 events, 210 close games, 281 blowouts), which no model, rule or threshold was ever fitted or chosen on.
+
+```
+SEASON=2025 bench/run_load.sh fresh25 1000     # 2026-11-14 14:28-14:42 UTC, push mode
+```
+
+| query | result |
+|---|---|
+| `t8_t9_alerts.sql` (`season=2025`) | close games 210, with CLOSE_LATE 210 (**100%**); blowouts 281, alerted 10 (**3.6%**); **0.97** alerts/game; max 4 in a game |
+| `t4_loss.sql` | source 708,268 = raw = processed distinct; 1 natural redelivery; 0 published-not-processed; DLQ 0 |
+| `check_state fresh25 2025` | `games_in_redis=1230 mismatched=0 applied_total=708268` |
+| `t1_throughput.sql` | in 1,000.3 ev/s, out 999.7 ev/s; per-second min 583, p5 668 |
+| `t2_latency.sql` | p50 461 ms, p90 1,453 ms, p99 9,313 ms; steady minutes p50 204-590 ms, p99 1.1-2.9 s; minute 0 p99 14.9 s (aligned start) |
+
+T9 now passes on a season nobody tuned on, with margin (3.6% vs 5%), though less margin than validation suggested (0.9%). Expect that gap: validation is the season the thresholds were picked on.
 
 ## T3: alert latency (runs `t3a`, `t3b`; `bench/queries/t3_alert_latency.sql`)
 

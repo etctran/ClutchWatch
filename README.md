@@ -35,17 +35,18 @@ All numbers are from runs on GCP; commands and BigQuery queries are in [RESULTS.
 
 | | Target | Measured | |
 |---|---|---|---|
-| T1 throughput | ≥ 1,000 ev/s for 10 min | 686,008 events in 686 s, processed 999.5 ev/s average (per-second min 361) | ✅ |
-| T2 latency, publish → state | p50 < 150 ms, p99 < 1 s | 4 runs: p50 1,328 / 779 / 85 / 756 ms, p99 7-15 s; processor itself 23 ms | ❌ delay is inside Pub/Sub before push dispatch |
+| T1 throughput | ≥ 1,000 ev/s for 10 min | every full-season run kept up (e.g. 686,008 events in 686 s, 999.5 ev/s processed) | ✅ |
+| T2 latency, publish → state | p50 < 150 ms, p99 < 1 s | push, 5 runs: p50 85-1,328 ms, p99 7-15 s; StreamingPull tried twice, slower; processor itself 23 ms | ❌ time is inside Pub/Sub before delivery |
 | T3 alert → Discord | p95 < 2 s | p95 914 ms at real game pace ×30 | ✅ + stretch |
-| T4 event loss | 0 | 0 lost in each of 5 full-season runs; DLQ empty | ✅ |
+| T4 event loss | 0 | 0 lost in 8 full-season runs (5.5M events); DLQ empty | ✅ |
 | T5 duplicates, 10% forced redelivery | 0 double-applied | 68,797 redeliveries, 0 double-applied, 1,230/1,230 final scores exact | ✅ |
 | T6 redeploy mid-replay | no loss, correct state | 0 lost, no throughput gap, latency normal ~70 s later | ✅ |
-| T7 model (2024-25 test) | beat baselines, calibrated ≤ 0.05 | Brier 0.164 vs 0.250 / 0.250; max decile error 0.031 | ✅ + stretch |
-| T8 alert recall | ≥ 90% of games ≤ 3 pts or OT | 221 / 221 | ✅ + stretch |
-| T9 alert spam | ≤ 5% of blowouts; ≤ 1.5/game | 6.6% of blowouts; 1.31/game | ❌ / ✅ |
+| T7 model | beat baselines, calibrated ≤ 0.05 | Brier 0.161 vs 0.250 on the held-out 2025-26 season; max decile error 0.023 | ✅ + stretch |
+| T8 alert recall | ≥ 90% of games ≤ 3 pts or OT | 210 / 210 on held-out 2025-26 | ✅ + stretch |
+| T9 alert spam | ≤ 5% of blowouts; ≤ 1.5/game | 3.6% of blowouts, 0.97/game on held-out 2025-26 | ✅ |
+| T11 deploy | one script, < 10 min | 6 min 49 s from torn-down | ✅ + stretch |
 
-Alert rules were tuned on 2023-24 only and tested on 2024-25 (spec rules on the same season: 71% recall, 50% of blowouts alerted).
+Model trained on 2020-21..2022-23; model selection and alert tuning on 2023-24; tests on 2024-25 and 2025-26 (the latter never used for any choice). The spec's original alert rules on 2023-24: 76% recall, 43% of blowouts alerted, 2.16/game.
 
 ## Run it
 
