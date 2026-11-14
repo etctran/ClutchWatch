@@ -40,3 +40,11 @@
 - **Exit met.**
 - Not T3: publish->Discord was ~23-25 s here, queueing behind the ~20 ev/s per-game drain rate (see M2 note).
 - Offline preview of the spec's rules over all of 2024-25 (`evaluate` run locally, NOT a T8/T9 measurement): CLOSE_LATE on 157/221 games decided by <=3 or OT (71%); 129/259 blowouts (>=20) got an alert; 2.23 alerts/game. WP_SWING (2,031 of 2,739 alerts) fills the 4-alert cap first. Decision on tuning deferred to M5.
+
+## M5: Load, chaos, measurement (2026-11-13/14)
+- Alert rules tuned on 2023-24 (DECISIONS), replayer moved to a Cloud Run Job (`--align`, `--run-tag`), queries in `bench/queries/`, `bench/check_state.py` for Redis-vs-source.
+- Runs: `load1`, `chaos5` (10% forced NACK), `chaos6` (clean in effect), `chaos7` (mid-run redeploy), `load2`, `t3a`, `t3b`. All numbers and commands in RESULTS.md.
+- Met: T1 (avg), T3 (+stretch, at real pace), T4 (5 full-season runs, 0 lost), T5, T6, T7, T8 (+stretch), T9 alerts/game.
+- Missed: T2 (p50 met in 1 of 4 runs; delay inside Pub/Sub before push dispatch), T9 blowout rate (6.6% vs 5%).
+- Not measured yet: T10 (needs the billing report, which lags ~1 day), T11 (timed from-scratch deploy).
+- Torn down with `scripts/teardown.sh redis` (Memorystore + Cloud Run services + push subscriptions); BigQuery kept so every query in RESULTS.md can be rerun. `scripts/deploy.sh` restores.
