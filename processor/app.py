@@ -99,7 +99,10 @@ async def lifespan(_app):
     yield
     if future:  # SIGTERM (new revision / scale-in): stop pulling; un-acked messages get redelivered
         future.cancel()
-        future.result(timeout=20)
+        try:
+            future.result(timeout=20)
+        except Exception:  # cancel surfaces as an exception from result(); shutdown is still clean
+            pass
 
 
 app = FastAPI(lifespan=lifespan)

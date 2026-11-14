@@ -17,7 +17,7 @@ from processor.winprob import FEATURES, features
 
 RAW = Path("data/raw")
 CACHE = Path("data/rows")
-SPLITS = {"train": [2020, 2021, 2022], "val": [2023], "test": [2024]}
+SPLITS = {"train": [2020, 2021, 2022], "val": [2023], "test": [2024], "test_2025": [2025]}
 OUT = Path("processor/wp_model.json")
 
 

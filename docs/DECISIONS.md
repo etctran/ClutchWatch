@@ -83,3 +83,16 @@ No service-account keys exist. The provider only accepts OIDC tokens whose `repo
 
 ## Live poller: on for game nights only, one instance, CPU always allocated
 It polls from a background thread rather than serving requests, so it needs `cpu_idle = false` and `min_instance_count = 1`. `max_instance_count = 1` because two pollers would double-publish (harmless thanks to dedup, but wasteful). It's behind `-var live_poller=true` so an idle project costs nothing.
+
+## Alert thresholds retuned on 2023-24, with margin; 2025-26 is the new held-out test
+The first tuning (late-game only + reserved CLOSE_LATE slot, spec thresholds unchanged) hit 4.7% of blowouts alerted on 2023-24 but 6.6% on 2024-25: no margin. Retuned on 2023-24 only (`uv run python -m bench.tune_alerts 2023`); 2024-25 has now been looked at, so it can't be the test set again. 2025-26 (1,230 games, 708,268 events, never used for anything) is.
+
+| Variant (2023-24) | recall | blowouts alerted | alerts/game |
+|---|---|---|---|
+| spec rules | 0.757 | 0.426 | 2.16 |
+| late + reserve 2 (first ship) | 1.000 | 0.047 | 1.30 |
+| + swing 0.35 | 1.000 | 0.026 | 1.06 |
+| **+ swing 0.35 + comeback 18 (chosen)** | **1.000** | **0.009** | **0.98** |
+| + swing 0.40 + comeback 20 | 1.000 | 0.009 | 0.87 |
+
+Chosen: WP_SWING fires at |ΔWP| >= 0.35 (spec 0.25) and COMEBACK needs a prior deficit >= 18 (spec 15); everything else as before. Smallest threshold changes that reach ~5x margin on the 5% target; going further only trades away alerts in genuinely close games. Product reading: a 25-point WP move in Q4 happens on most made threes in a close game, so it was spam; 35 points is a real turn. Both spec thresholds are recorded here so the change is visible.

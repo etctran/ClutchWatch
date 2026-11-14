@@ -44,6 +44,7 @@ def main() -> None:
     wp = WinProb()
     report("val 2023-24", split("val"), wp)
     cal = report("test 2024-25", split("test"), wp)
+    report("test 2025-26 (held out, never tuned on)", split("test_2025"), wp)
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.plot([0, 1], [0, 1], "--", color="gray", label="perfect")
     ax.plot(cal.pred, cal.actual, "o-", label="model (test 2024-25)")
