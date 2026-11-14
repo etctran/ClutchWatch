@@ -3,11 +3,11 @@ resource "google_pubsub_topic" "state_updates" { name = "state-updates" }
 resource "google_pubsub_topic" "game_events_dlq" { name = "game-events-dlq" }
 
 # Processor subscription, ordered per game (ordering_key = game_id), DLQ after 5 attempts.
-# processor_mode = "pull": the processor runs a StreamingPull client (measured faster, see DECISIONS).
-# processor_mode = "push": Pub/Sub POSTs to the processor's URL (the original design).
+# processor_mode = "push": Pub/Sub POSTs to the processor's URL (default; measured faster, DECISIONS).
+# processor_mode = "pull": the processor runs a StreamingPull client (kept for comparison runs).
 variable "processor_mode" {
   type    = string
-  default = "pull"
+  default = "push"
   validation {
     condition     = contains(["push", "pull"], var.processor_mode)
     error_message = "processor_mode must be push or pull"

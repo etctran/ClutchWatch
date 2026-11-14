@@ -100,7 +100,22 @@ bench/run_load.sh pull1 1000                                    # 2026-11-14 13:
 
 ### `pull2`: 4 instances x 2 vCPU, 32 threads, 1,000 outstanding per instance
 
-(pending)
+```
+bench/run_load.sh pull2 1000     # 2026-11-14 14:06-14:22 UTC; single revision serving throughout
+```
+
+| | result |
+|---|---|
+| correctness | 686,008 / 686,008, 0 lost, DLQ 0, 1,230/1,230 exact, 0 redeliveries |
+| throughput | in 1,000.6 ev/s, out 999.4 ev/s (per-second min 666, p5 875: smoother than push's 361 / 475) |
+| latency | p50 **2,191 ms**, p90 4,350 ms, p99 6,363 ms, p99.9 8,430 ms, max 12.5 s |
+| by minute | p50 2.0-2.8 s in every steady minute (1.2 s in minute 5); p99 4.8-6.2 s |
+| by gap | burst events p50 2.1 s; quiet events (nothing ahead of them in their game) p50 1.5 s |
+| Cloud Monitoring | CPU 0.46-0.48 of 2.0 per instance (not CPU-bound); `num_undelivered_messages` steady at 1,500-2,500 (about 2 s of traffic) for the whole run; `oldest_unacked_message_age` 4-5 s; 0 expired ack deadlines |
+
+Resourced like push, pull is still slower: p50 2.2 s against push's 0.8-1.3 s (best push run 85 ms). The steady ~2,000-message undelivered backlog with idle clients says the wait is on the Pub/Sub side before messages reach the stream, which this project can't change. T1 improves (smoother per-second output), T2 gets worse.
+
+**Decision:** `processor_mode` defaults back to `push`; pull stays in the code and Terraform for comparison. The latency hypothesis was wrong and the two runs that disproved it are the result. T2 remains missed on the final design.
 
 ## T3: alert latency (runs `t3a`, `t3b`; `bench/queries/t3_alert_latency.sql`)
 
