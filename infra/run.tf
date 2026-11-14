@@ -1,4 +1,8 @@
 resource "google_cloud_run_v2_service" "processor" {
+  lifecycle {
+    # CI (scripts/release.sh) owns the running image; infra applies must not roll code back
+    ignore_changes = [template[0].containers[0].image, client, client_version]
+  }
   name                = "processor"
   location            = var.region
   deletion_protection = false
@@ -59,6 +63,9 @@ variable "force_nack_rate" {
 # Replayer runs on Google's NTP-synced machines so published_at/processed_at share a clock.
 #   gcloud run jobs execute replayer --region us-central1 --args=<replayer flags>
 resource "google_cloud_run_v2_job" "replayer" {
+  lifecycle {
+    ignore_changes = [template[0].template[0].containers[0].image, client, client_version]
+  }
   name                = "replayer"
   location            = var.region
   deletion_protection = false

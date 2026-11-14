@@ -14,4 +14,6 @@ REPO="$REGION-docker.pkg.dev/$PROJECT/clutchwatch"
 TAG="$(git rev-parse --short HEAD)$(git diff --quiet HEAD -- . ':!infra' || echo "-dirty$(date +%s)")"
 gcloud builds submit --project "$PROJECT" --region "$REGION" --tag "$REPO/pipeline:$TAG" .
 tf apply -auto-approve -input=false "${VARS[@]}" -var "image=$REPO/pipeline:$TAG"
+# Terraform ignores image changes on existing services (CI owns them); roll the new one out.
+./scripts/release.sh "$REPO/pipeline:$TAG"
 tf output

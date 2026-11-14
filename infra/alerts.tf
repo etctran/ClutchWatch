@@ -13,6 +13,10 @@ resource "google_secret_manager_secret" "discord_webhook" {
 resource "google_service_account" "notifier" { account_id = "cw-notifier" }
 
 resource "google_cloud_run_v2_service" "notifier" {
+  lifecycle {
+    # CI (scripts/release.sh) owns the running image; infra applies must not roll code back
+    ignore_changes = [template[0].containers[0].image, client, client_version]
+  }
   name                = "notifier"
   location            = var.region
   deletion_protection = false
