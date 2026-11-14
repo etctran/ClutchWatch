@@ -11,12 +11,13 @@ pipeline metrics, the BigQuery query in `bench/queries/`) is listed with it.
 | T2 | Publish -> state updated | p50 < 150 ms, p99 < 1 s | 4 full runs at 1,000 ev/s: p50 1,328 / 779 / 85 / 756 ms; p99 9.3 / 7.0 / 7.1 / 15.1 s (processor's own request time p50 23 ms) | **No** (p50 met in 1 of 4 runs, p99 in none); time is spent inside Pub/Sub before push dispatch |
 | T5 | Duplicate safety, 10% forced redelivery | 0 double-applied; final scores match | 68,797 redeliveries; 0 double-applied, 0 lost; 1,230/1,230 final scores exact; alerts identical to clean run (1,615 = 1,615) | Yes |
 | T6 | Crash recovery (redeploy mid-replay) | no loss, correct final state; stretch recovery < 30 s | 0 lost of 686,008; 1,230/1,230 exact; alerts identical; no throughput gap; latency back to baseline ~70 s after the redeploy started | Yes; stretch: no stall at all, latency bump ~40 s |
+| T3 | Alert latency, publish -> Discord accepted | p95 < 2 s (stretch < 1 s) | 10 OT games at real pace x30: p50 385 ms, p95 914 ms, 36/36 delivered once. Same games over-driven at 50 ev/s into 1-2 games: p95 30.1 s | Yes (+ stretch) at real pace; no when one game is over-driven |
 | T4 | Event loss, full season | 0 lost of ~600K | 0 lost of 686,008 in each of 5 full-season runs (load1, chaos5, chaos6, chaos7, load2); DLQ empty; 1,230/1,230 games correct in Redis every time | Yes |
 | T7 | Model quality | Brier beats baselines; calibration <= 0.05/decile | Brier 0.1641 (baselines 0.2500 / 0.2497); max decile error 0.0310 | Yes (+ stretch) |
 | T8 | Alert recall | >= 90% of games <=3 pts or OT get CLOSE_LATE | 221/221 = 100% | Yes (+ stretch) |
 | T9 | Alert spam | <= 5% of blowouts alerted; <= 1.5 alerts/game | 17/259 = 6.6% of blowouts; 1.31 alerts/game | **No** (blowouts, narrowly); alerts/game yes |
 
-T3, T10, T11: see below / pending.
+T10, T11: see below / pending.
 
 ## Load run `load1` (T1, T2, T4, T8, T9)
 
@@ -73,6 +74,25 @@ Rules as tuned on 2023-24 (DECISIONS: "Alert rules tuned on 2023-24"); 2024-25 i
 | 221 | 221 | **100%** | 259 | 17 | **6.6%** | **1.31** | 4 |
 
 T8 met (stretch too). T9 alerts/game met; blowout rate missed narrowly: 6.6% vs 5% (validation had 4.7%). For reference, the spec's untuned rules on the same season (offline, same `evaluate` code): 71% recall, 50% of blowouts alerted, 2.23/game.
+
+## T3: alert latency (runs `t3a`, `t3b`; `bench/queries/t3_alert_latency.sql`)
+
+Discord posting on (`notify_discord=true`), the same 10 overtime games of 2024-25 (`0022400002,...,0022400144`, 6,237 events), from the replayer Job. Latency = Discord's 2xx time (`alert_deliveries.delivered_at`, notifier clock) minus the triggering event's `published_at` (replayer clock).
+
+```
+# t3b: real game timeline, 30x faster, all 10 games tipping off together (~2 ev/s per game)
+gcloud run jobs execute replayer --args="^;^--csv;data/replay/season_2024.parquet;--topic;projects/clutchwatch-bywa6u/topics/game-events;--speedup;30;--align;--games;<10 ids>;--run-tag;t3b"
+# t3a: same games, --target-rate 50, not aligned (games run 1-2 at a time, so ~50 ev/s into a single game)
+```
+
+| run | pace | alerts fired | delivered (2xx) | max deliveries/alert | p50 | p95 | max | p95 publish->alert | p95 alert->Discord |
+|---|---|---|---|---|---|---|---|---|---|
+| **`t3b`** | real x30 | 36 | 36 | 1 | **385 ms** | **914 ms** | 1,016 ms | 186 ms | 871 ms |
+| `t3a` | 50 ev/s, 1-2 games at a time | 36 | 36 | 1 | 13,958 ms | 30,119 ms | 31,156 ms | 27,181 ms | 2,938 ms |
+
+At a realistic per-game pace (still 30x denser than a live game) T3 and its stretch are met, and Discord's own response is most of the remaining time. `t3a` shows the same per-game limit as T2: driving one game at 50 ev/s against a ~20 ev/s ordered drain builds a backlog in front of the alert. Same alerts fired in both runs, each delivered exactly once.
+
+The `t3b` run's events also give a low-load latency point for T2 (`t2_latency.sql`, tag `t3b`, ~17 ev/s total): p50 77 ms, p99 923 ms. That is within T2's thresholds, but T2 is defined at 1,000 ev/s, so it is a data point, not a pass.
 
 ## T5: duplicate safety (run `chaos5`)
 
